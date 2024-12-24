@@ -1,0 +1,87 @@
+parameters:
+- name: Environment
+  displayName: Environment name
+  type: string
+  default: qa
+  values:
+  - dev
+  - qa
+  - uat
+- name: Action
+  displayName: Action
+  type: string
+  default: plan
+  values:
+  - plan
+  - apply
+variables:
+  - name: ServiceConnection
+    ${{ if eq( parameters['Environment'] , 'dev') }}:
+      value: loop2.0
+    ${{ if eq( parameters['Environment'], 'qa') }}:
+      value: loop2.0
+    ${{ if eq( parameters['Environment'], 'uat') }}:
+      value: Loop2.0-prod-new
+
+trigger: none
+
+pool:
+  vmImage: ubuntu-latest
+
+jobs:
+  - job: Provision
+    timeoutInMinutes: 120
+    steps:
+      - task: ms-devlabs.custom-terraform-tasks.custom-terraform-installer-task.TerraformInstaller@1
+        displayName: Install Terraform
+        inputs:
+          terraformVersion: 'latest'
+
+      - task: DownloadSecureFile@1
+        displayName: Download certificate
+        name: cert
+        inputs:
+          secureFile: '__centific_com.crt'
+
+      - task: DownloadSecureFile@1
+        displayName: Download certificate key
+        name: key
+        inputs:
+          secureFile: '__centific_com_key.pem'
+
+      - task: TerraformTaskV4@4
+        displayName: Initialize Terraform
+        inputs:
+          provider: 'azurerm'
+          customCommand: 'init'
+          command: 'custom'
+          commandOptions: '-backend-config=environments/${{ parameters.Environment }}/${{ parameters.Environment }}-backend.conf'
+          backendType: 'azurerm'
+          environmentServiceNameAzureRM: '${{ variables.ServiceConnection }}'
+
+      - task: TerraformTaskV4@4
+        displayName: Select Terraform workspace
+        inputs:
+          provider: 'azurerm'
+          command: 'custom'
+          customCommand: 'workspace'
+          commandOptions: 'select -or-create ${{ parameters.Environment }}'
+          environmentServiceNameAzureRM: '${{ variables.ServiceConnection }}'
+
+      - task: TerraformTaskV4@4
+        displayName: Plan
+        condition: eq('${{ parameters.Action }}', 'plan')
+        inputs:
+          provider: 'azurerm'
+          command: 'plan'
+          environmentServiceNameAzureRM: '${{ variables.ServiceConnection }}'
+          commandOptions: '-var psql_administrator_login=$(psql_admin_username) -var psql_administrator_login_password=$(psql_admin_password) -var tlscrt=$(cert.secureFilePath) -var tlskey=$(key.secureFilePath) -var-file=environments/${{ parameters.Environment }}/${{ parameters.Environment }}.tfvars'
+
+      - task: TerraformTaskV4@4
+        displayName: Apply
+        condition: eq('${{ parameters.Action }}', 'apply')
+        inputs:
+          provider: 'azurerm'
+          command: 'apply'
+          environmentServiceNameAzureRM: '${{ variables.ServiceConnection }}'
+          commandOptions: '-var psql_administrator_login=$(psql_admin_username) -var psql_administrator_login_password=$(psql_admin_password) -var tlscrt=$(cert.secureFilePath) -var tlskey=$(key.secureFilePath) -var-file=environments/${{ parameters.Environment }}/${{ parameters.Environment }}.tfvars'
